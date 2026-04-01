@@ -67,7 +67,7 @@ export default function App() {
 
   // CRUD
   const saveCliente = async (f) => {
-    const d = { nome:f.nome, referente:f.referente, email:f.email, ateco:f.ateco, sede:f.sede, alert_attivi:f.alert_attivi, note:f.note };
+    const d = { nome:f.nome, referente:f.referente, email:f.email, ateco:f.ateco, sede:f.sede, alert_attivi:f.alert_attivi, consulente:f.consulente, note:f.note };
     if (f.id) await supabase.from('clienti').update(d).eq('id', f.id);
     else await supabase.from('clienti').insert(d);
     await loadAll(); setModal(null); showToast("Cliente salvato!");
@@ -147,14 +147,15 @@ export default function App() {
 
   // FORMS
   const ClienteForm = ({data}) => {
-    const [f,setF]=useState(data||{nome:"",referente:"",email:"",ateco:"",sede:"",alert_attivi:true,note:""});
+    const [f,setF]=useState(data||{nome:"",referente:"",email:"",ateco:"",sede:"",consulente:"",alert_attivi:true,note:""});
     return <div>
       <Field label="Nome Azienda *"><input style={inputS} value={f.nome} onChange={e=>setF({...f,nome:e.target.value})}/></Field>
       <Field label="Referente"><input style={inputS} value={f.referente||""} onChange={e=>setF({...f,referente:e.target.value})}/></Field>
       <Field label="Email"><input style={inputS} type="email" value={f.email||""} onChange={e=>setF({...f,email:e.target.value})}/></Field>
       <div style={{display:"flex",gap:12}}><div style={{flex:1}}><Field label="ATECO"><input style={inputS} value={f.ateco||""} onChange={e=>setF({...f,ateco:e.target.value})}/></Field></div><div style={{flex:2}}><Field label="Sede"><input style={inputS} value={f.sede||""} onChange={e=>setF({...f,sede:e.target.value})}/></Field></div></div>
+      <Field label="Consulente"><input style={inputS} value={f.consulente||""} onChange={e=>setF({...f,consulente:e.target.value})} placeholder="Nome del consulente responsabile"/></Field>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}><input type="checkbox" checked={f.alert_attivi} onChange={e=>setF({...f,alert_attivi:e.target.checked})}/><span style={{fontSize:13}}>Alert email attivi</span></div>
-      <Field label="Note"><input style={inputS} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})}/></Field>
+      <Field label="Note"><textarea style={{...inputS,minHeight:100,resize:"vertical"}} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})} placeholder="Annotazioni, informazioni aggiuntive..."/></Field>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:f.nome?1:.5}} disabled={!f.nome} onClick={()=>saveCliente(f)}>Salva</button></div>
     </div>;
   };
@@ -348,7 +349,7 @@ export default function App() {
           <button onClick={()=>{setPg("cli");setSelC(null);}} style={{background:"none",border:"none",color:"#2563EB",cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:12,padding:0}}>{"\u2190"} Clienti</button>
           <div style={{background:"#fff",borderRadius:12,padding:"20px 24px",boxShadow:"0 1px 3px rgba(0,0,0,.06)",marginBottom:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
-              <div><h1 style={{fontSize:20,fontWeight:800,color:"#0F172A",margin:"0 0 4px"}}>{c.nome}</h1><div style={{fontSize:13,color:"#6B7280"}}>{c.referente} · {c.email} · {c.sede}</div></div>
+              <div><h1 style={{fontSize:20,fontWeight:800,color:"#0F172A",margin:"0 0 4px"}}>{c.nome}</h1><div style={{fontSize:13,color:"#6B7280"}}>{c.referente} · {c.email} · {c.sede}{c.consulente&&<span style={{color:"#2563EB",fontWeight:600}}> · Consulente: {c.consulente}</span>}</div></div>
               <div style={{display:"flex",alignItems:"center",gap:8}}><Badge stato={cSem(c.id)}/><button onClick={()=>setModal({type:"cliente",data:c})} style={{...btnG,fontSize:11,padding:"6px 12px"}}>{"\u270F"}</button><button onClick={()=>setConfirm({msg:`Eliminare ${c.nome}?`,action:()=>deleteCliente(c.id)})} style={{...btnD,fontSize:11,padding:"6px 12px"}}>{"\uD83D\uDDD1"}</button></div>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}><span style={{fontSize:12,color:c.alert_attivi?"#16A34A":"#9CA3AF",fontWeight:600}}>{c.alert_attivi?"\uD83D\uDD14 Alert attivi":"\uD83D\uDD15 Alert off"}</span><button onClick={()=>toggleAlertCli(c.id,c.alert_attivi)} style={{fontSize:11,color:"#2563EB",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>{c.alert_attivi?"Disattiva":"Attiva"}</button></div>
