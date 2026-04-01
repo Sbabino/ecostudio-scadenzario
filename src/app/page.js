@@ -38,6 +38,7 @@ export default function App() {
   const [fatt, setFatt] = useState([]);
   const [alertLogs, setAlertLogs] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [pg, setPg] = useState("dash");
   const [selC, setSelC] = useState(null);
   const [selCat, setSelCat] = useState(null);
@@ -89,11 +90,17 @@ export default function App() {
     if (isAdmin) {
       const { data: profs } = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'list'}) }).then(r=>r.json());
       setProfiles(profs || []);
+      const { data: aLogs } = await supabase.from('audit_log').select('*').order('created_at', { ascending: false }).limit(200);
+      setAuditLogs(aLogs || []);
     }
     setLoading(false);
   }, [profilo, isAdmin, clienteIdFiltro]);
 
   useEffect(() => { if (profilo) loadAll(); }, [profilo, loadAll]);
+
+  const logAction = async (azione, tabella, record_id, dettagli) => {
+    await supabase.from('audit_log').insert({ utente_id: user?.id, utente_email: profilo?.email, azione, tabella, record_id, dettagli });
+  };
 
   // CRUD
   const saveCliente = async (f) => {
@@ -109,8 +116,8 @@ export default function App() {
   };
   const saveLav = async (f) => {
     const d = { nome:f.nome, cognome:f.cognome, mansione:f.mansione, cliente_id:f.cliente_id, note:f.note };
-    if (f.id) await supabase.from('lavoratori').update(d).eq('id', f.id);
-    else await supabase.from('lavoratori').insert(d);
+    if (f.id) { await supabase.from('lavoratori').update(d).eq('id', f.id); await logAction('Modifica lavoratore','lavoratori',f.id,`${f.nome} ${f.cognome}`); }
+    else { const {data:ins} = await supabase.from('lavoratori').insert(d).select().single(); await logAction('Nuovo lavoratore','lavoratori',ins?.id,`${f.nome} ${f.cognome}`); }
     await loadAll(); setModal(null); showToast("Lavoratore salvato!");
   };
   const deleteLav = async (id) => {
@@ -119,11 +126,13 @@ export default function App() {
   };
   const saveScad = async (f) => {
     const d = { categoria:f.categoria, cliente_id:f.cliente_id, lavoratore_id:f.lavoratore_id||null, descrizione:f.descrizione, data_esecuzione:f.data_esecuzione, periodicita_mesi:f.periodicita_mesi, alert_on:f.alert_on, note:f.note };
-    if (f.id) await supabase.from('scadenze').update(d).eq('id', f.id);
-    else await supabase.from('scadenze').insert(d);
+    if (f.id) { await supabase.from('scadenze').update(d).eq('id', f.id); await logAction('Modifica scadenza','scadenze',f.id,`${f.descrizione} - data: ${f.data_esecuzione}`); }
+    else { const {data:ins} = await supabase.from('scadenze').insert(d).select().single(); await logAction('Nuova scadenza','scadenze',ins?.id,f.descrizione); }
     await loadAll(); setModal(null); showToast("Scadenza salvata!");
   };
   const deleteScad = async (id) => {
+    const sc = scads.find(s=>s.id===id);
+    await logAction('Eliminazione scadenza','scadenze',id,sc?.descrizione||'');
     await supabase.from('scadenze').delete().eq('id', id);
     await loadAll(); setConfirm(null); showToast("Scadenza eliminata");
   };
@@ -222,25 +231,27 @@ export default function App() {
   };
 
   const LavForm = ({data,clienteId}) => {
-    const [f,setF]=useState(data||{nome:"",cognome:"",mansione:"",cliente_id:clienteId||"",note:""});
+    const cId = clienteId || (clienteIdFiltro ? clienteIdFiltro : "");
+    const [f,setF]=useState(data||{nome:"",cognome:"",mansione:"",cliente_id:cId,note:""});
     return <div>
       <div style={{display:"flex",gap:12}}><div style={{flex:1}}><Field label="Nome *"><input style={inputS} value={f.nome} onChange={e=>setF({...f,nome:e.target.value})}/></Field></div><div style={{flex:1}}><Field label="Cognome *"><input style={inputS} value={f.cognome} onChange={e=>setF({...f,cognome:e.target.value})}/></Field></div></div>
       <Field label="Mansione"><input style={inputS} value={f.mansione||""} onChange={e=>setF({...f,mansione:e.target.value})}/></Field>
-      <Field label="Cliente *"><select style={inputS} value={f.cliente_id} onChange={e=>setF({...f,cliente_id:Number(e.target.value)})}><option value="">-- Seleziona --</option>{clienti.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></Field>
+      {isAdmin&&<Field label="Cliente *"><select style={inputS} value={f.cliente_id} onChange={e=>setF({...f,cliente_id:Number(e.target.value)})}><option value="">-- Seleziona --</option>{clienti.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></Field>}
       <Field label="Note"><input style={inputS} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})} placeholder="Es: Preposto, Addetto PS..."/></Field>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:(f.nome&&f.cognome&&f.cliente_id)?1:.5}} disabled={!f.nome||!f.cognome||!f.cliente_id} onClick={()=>saveLav(f)}>Salva</button></div>
     </div>;
   };
 
   const ScadForm = ({data,clienteId}) => {
-    const [f,setF]=useState(data||{categoria:"Formazione",cliente_id:clienteId||"",lavoratore_id:null,descrizione:"",data_esecuzione:"",periodicita_mesi:60,alert_on:true,note:""});
+    const cId = clienteId || (clienteIdFiltro ? clienteIdFiltro : "");
+    const [f,setF]=useState(data||{categoria:"Formazione",cliente_id:cId,lavoratore_id:null,descrizione:"",data_esecuzione:"",periodicita_mesi:60,alert_on:true,note:""});
     const [custom,setCustom]=useState(false);
     const cLavs=lavs.filter(l=>l.cliente_id===Number(f.cliente_id));
     const archCat=archivio.filter(a=>a.categoria===f.categoria);
     const onArch=val=>{if(val==="_custom"){setCustom(true);setF({...f,descrizione:""});return;}const it=archivio.find(a=>a.id===Number(val));if(it){setF({...f,descrizione:it.descrizione,periodicita_mesi:it.periodicita_mesi||f.periodicita_mesi,note:it.note||f.note});setCustom(false);}};
     return <div>
       <Field label="Categoria *"><select style={inputS} value={f.categoria} onChange={e=>setF({...f,categoria:e.target.value,descrizione:"",note:""})}>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select></Field>
-      <Field label="Cliente *"><select style={inputS} value={f.cliente_id} onChange={e=>setF({...f,cliente_id:Number(e.target.value),lavoratore_id:null})}><option value="">-- Seleziona --</option>{clienti.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></Field>
+      {isAdmin?<Field label="Cliente *"><select style={inputS} value={f.cliente_id} onChange={e=>setF({...f,cliente_id:Number(e.target.value),lavoratore_id:null})}><option value="">-- Seleziona --</option>{clienti.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></Field>:null}
       {f.categoria==="Formazione"&&<Field label="Lavoratore"><select style={inputS} value={f.lavoratore_id||""} onChange={e=>setF({...f,lavoratore_id:e.target.value?Number(e.target.value):null})}><option value="">-- Nessuno --</option>{cLavs.map(l=><option key={l.id} value={l.id}>{l.nome} {l.cognome}</option>)}</select></Field>}
       <Field label="Descrizione * (da Archivio o personalizzata)">
         {!data&&!custom?<div><select style={inputS} value={archCat.find(a=>a.descrizione===f.descrizione)?.id||""} onChange={e=>onArch(e.target.value)}><option value="">-- Scegli dall archivio --</option>{archCat.map(a=><option key={a.id} value={a.id}>{a.descrizione} ({a.periodicita_mesi}m)</option>)}<option value="_custom">{"\u270F"} Inserisci manualmente...</option></select>{f.descrizione&&<div style={{marginTop:4,fontSize:11,color:"#16A34A",fontWeight:600}}>Selezionato: {f.descrizione}</div>}</div>
@@ -249,7 +260,7 @@ export default function App() {
       </Field>
       <div style={{display:"flex",gap:12}}><div style={{flex:1}}><Field label="Data Esecuzione *"><input style={inputS} type="date" value={f.data_esecuzione||""} onChange={e=>setF({...f,data_esecuzione:e.target.value})}/></Field></div><div style={{flex:1}}><Field label="Periodicita (mesi) *"><input style={inputS} type="number" min="1" value={f.periodicita_mesi} onChange={e=>setF({...f,periodicita_mesi:Number(e.target.value)})}/></Field></div></div>
       <Field label="Note"><input style={inputS} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})}/></Field>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}><input type="checkbox" checked={f.alert_on} onChange={e=>setF({...f,alert_on:e.target.checked})}/><span style={{fontSize:13}}>Avvisi email attivi</span></div>
+      {isAdmin&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}><input type="checkbox" checked={f.alert_on} onChange={e=>setF({...f,alert_on:e.target.checked})}/><span style={{fontSize:13}}>Avvisi email attivi</span></div>}
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:(f.descrizione&&f.cliente_id&&f.data_esecuzione&&f.periodicita_mesi)?1:.5}} disabled={!f.descrizione||!f.cliente_id||!f.data_esecuzione||!f.periodicita_mesi} onClick={()=>saveScad(f)}>Salva</button></div>
     </div>;
   };
@@ -324,7 +335,7 @@ export default function App() {
 
   // Excel table renderer
   const renderTable = (items) => <div style={{overflowX:"auto",borderRadius:8,border:bdr}}>
-    <table style={{borderCollapse:"collapse",width:"100%",minWidth:700}}>
+    <table style={{borderCollapse:"collapse",width:"100%",minWidth:600}}>
       <thead><tr>
         <th style={{...thS,textAlign:"left",minWidth:200}}>Adempimento</th>
         <th style={{...thS,width:80}}>Mesi</th>
@@ -332,7 +343,7 @@ export default function App() {
         <th style={{...thS,width:100}}>Scadenza</th>
         <th style={{...thS,width:60}}>Giorni</th>
         <th style={{...thS,width:90}}>Stato</th>
-        <th style={{...thS,width:45}}>Alert</th>
+        {isAdmin&&<th style={{...thS,width:45}}>Alert</th>}
         <th style={{...thS,width:70}}>Azioni</th>
       </tr></thead>
       <tbody>
@@ -343,14 +354,14 @@ export default function App() {
           <td style={{...tdS,textAlign:"center",fontWeight:600}}>{fmtD(sc.data_scadenza)}</td>
           <td style={{...tdS,textAlign:"center",fontWeight:800,fontSize:16,color:SC[sc.stato].bg,background:statoBg(sc.stato)}}>{sc.gg??"-"}</td>
           <td style={{...tdS,textAlign:"center",background:statoBg(sc.stato)}}><Badge stato={sc.stato}/></td>
-          <td style={{...tdS,textAlign:"center"}}><button onClick={()=>toggleAlert(sc.id,sc.alert_on)} style={{fontSize:14,background:"none",border:"none",cursor:"pointer"}}>{sc.alert_on?"\uD83D\uDD14":"\uD83D\uDD15"}</button></td>
+          {isAdmin&&<td style={{...tdS,textAlign:"center"}}><button onClick={()=>toggleAlert(sc.id,sc.alert_on)} style={{fontSize:14,background:"none",border:"none",cursor:"pointer"}}>{sc.alert_on?"\uD83D\uDD14":"\uD83D\uDD15"}</button></td>}
           <td style={{...tdS,textAlign:"center"}}><div style={{display:"flex",gap:4,justifyContent:"center"}}>
             <button onClick={()=>setModal({type:"scad",data:sc})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#6B7280"}}>{"\u270F"}</button>
-            <button onClick={()=>setLpop(sc)} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#2563EB"}}>{"\uD83D\uDCE7"}</button>
+            {isAdmin&&<button onClick={()=>setLpop(sc)} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#2563EB"}}>{"\uD83D\uDCE7"}</button>}
             <button onClick={()=>setConfirm({msg:`Eliminare "${sc.descrizione}"?`,action:()=>deleteScad(sc.id)})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#DC2626"}}>{"\uD83D\uDDD1"}</button>
           </div></td>
         </tr>)}
-        {items.length===0&&<tr><td colSpan={8} style={{...tdS,textAlign:"center",color:"#9CA3AF",padding:20}}>Nessuna scadenza.</td></tr>}
+        {items.length===0&&<tr><td colSpan={isAdmin?8:7} style={{...tdS,textAlign:"center",color:"#9CA3AF",padding:20}}>Nessuna scadenza.</td></tr>}
       </tbody>
     </table>
   </div>;
@@ -369,8 +380,8 @@ export default function App() {
             <div style={{fontWeight:800,fontSize:16,color:SC[sc.stato].bg}}>{sc.gg}</div>
             <div style={{fontSize:9,color:"#6B7280"}}>gg | {fmtD(sc.data_scadenza)}</div>
             <div style={{display:"flex",gap:3,justifyContent:"center",marginTop:2}}>
-              <button onClick={e=>{e.stopPropagation();toggleAlert(sc.id,sc.alert_on);}} style={{fontSize:10,background:"none",border:"none",cursor:"pointer",color:sc.alert_on?"#16A34A":"#9CA3AF"}}>{sc.alert_on?"\uD83D\uDD14":"\uD83D\uDD15"}</button>
-              <button onClick={e=>{e.stopPropagation();setLpop(sc);}} style={{fontSize:10,background:"none",border:"none",cursor:"pointer",color:"#2563EB"}}>{"\uD83D\uDCE7"}</button>
+              {isAdmin&&<button onClick={e=>{e.stopPropagation();toggleAlert(sc.id,sc.alert_on);}} style={{fontSize:10,background:"none",border:"none",cursor:"pointer",color:sc.alert_on?"#16A34A":"#9CA3AF"}}>{sc.alert_on?"\uD83D\uDD14":"\uD83D\uDD15"}</button>}
+              {isAdmin&&<button onClick={e=>{e.stopPropagation();setLpop(sc);}} style={{fontSize:10,background:"none",border:"none",cursor:"pointer",color:"#2563EB"}}>{"\uD83D\uDCE7"}</button>}
             </div></td>;})}
         </tr>)}</tbody>
       </table>
@@ -389,7 +400,7 @@ export default function App() {
           <div style={{fontSize:7.5,color:"#64748B",letterSpacing:1.5,marginTop:2}}>Rifiuti ~ Ambiente ~ Sicurezza</div>
         </div>
         <nav style={{padding:"14px 8px",flex:1,display:"flex",flexDirection:"column",gap:2}}>
-          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard",admin:false},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert",admin:false},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti",admin:true},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio",admin:true},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione",admin:true},{id:"cons",ic:"\uD83D\uDD12",lb:"Consulenza",admin:true}].filter(it=>isAdmin||!it.admin).map(it=>(
+          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard",admin:false},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert",admin:false},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti",admin:true},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio",admin:false},{id:"log",ic:"\uD83D\uDCDD",lb:"Log Attivita",admin:true},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione",admin:true},{id:"cons",ic:"\uD83D\uDD12",lb:"Consulenza",admin:true}].filter(it=>isAdmin||!it.admin).map(it=>(
             <button key={it.id} onClick={()=>{setPg(it.id);setSelC(null);}} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",background:pg===it.id||(pg==="det"&&it.id==="cli")?"rgba(37,99,235,.35)":"transparent",border:"none",color:"#fff",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:pg===it.id?700:400,textAlign:"left"}}>
               <span style={{fontSize:15}}>{it.ic}</span>{it.lb}
               {it.id==="alert"&&(tS+tU)>0&&<span style={{marginLeft:"auto",background:"#DC2626",padding:"2px 7px",borderRadius:10,fontSize:10,fontWeight:700}}>{tS+tU}</span>}
@@ -408,7 +419,7 @@ export default function App() {
 
         {/* DASHBOARD */}
         {pg==="dash"&&<div>
-          <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 20px"}}>{isAdmin?"Dashboard Scadenzario":"Le tue Scadenze"}</h1>
+          <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 20px"}}>{isAdmin?"Dashboard Scadenzario":`${clienti[0]?.nome||"Le tue Scadenze"} — Scadenzario`}</h1>
           <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:28}}>
             <StatC label="SCADUTI" value={tS} color="#DC2626" icon={"\uD83D\uDD34"}/><StatC label="URGENTI" value={tU} color="#F59E0B" icon={"\uD83D\uDFE0"}/><StatC label="IN SCADENZA" value={tI} color="#EAB308" icon={"\uD83D\uDFE1"}/><StatC label="IN REGOLA" value={tO} color="#16A34A" icon={"\uD83D\uDFE2"}/>
           </div>
@@ -421,13 +432,31 @@ export default function App() {
               </div>;})}
             </div>
           </div>}
-          {!isAdmin&&<div>
-            <Legenda/>
-            {scads.sort((a,b)=>(a.gg??9999)-(b.gg??9999)).map(s=><div key={s.id} style={{background:"#fff",borderRadius:10,padding:"12px 16px",marginBottom:6,borderLeft:`5px solid ${SC[s.stato].bg}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div><div style={{fontWeight:600,fontSize:13,color:"#1F2937"}}>{s.descrizione}</div><div style={{fontSize:11,color:"#6B7280",marginTop:1}}>{s.categoria} · Scade: {fmtD(s.data_scadenza)}</div></div>
-              <div style={{textAlign:"right"}}><div style={{fontSize:18,fontWeight:800,color:SC[s.stato].bg}}>{s.gg??"-"}</div><div style={{fontSize:9,color:"#9CA3AF"}}>giorni</div></div>
-            </div>)}
-          </div>}
+          {!isAdmin&&(()=>{
+            const c=clienti[0]; if(!c) return <div style={{padding:20,color:"#9CA3AF"}}>Nessun dato disponibile.</div>;
+            const cs=scads.filter(s=>s.cliente_id===c.id),cL=lavs.filter(l=>l.cliente_id===c.id),at=selCat||"Formazione",tabS=cs.filter(x=>x.categoria===at);
+            return <div>
+              <Legenda/>
+              <div style={{background:"#fff",borderRadius:"12px 12px 0 0",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+                <div style={{display:"flex",borderBottom:"2px solid #E5E7EB",padding:"0 8px",overflowX:"auto"}}>
+                  {CATS.map(cat=>{const n=cs.filter(x=>x.categoria===cat).length,active=at===cat;return<button key={cat} onClick={()=>setSelCat(cat)} style={{...tabBase,color:active?CC[cat]:"#6B7280",borderBottomColor:active?CC[cat]:"transparent",fontWeight:active?700:500,background:active?"#FAFAFA":"transparent"}}>{CK[cat]} {cat.split("/")[0]} ({n})</button>;})}
+                </div>
+                <div style={{padding:"16px 20px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <h3 style={{fontSize:14,fontWeight:700,color:CC[at],margin:0}}>{CK[at]} {at}</h3>
+                    <div style={{display:"flex",gap:8}}>{at==="Formazione"&&addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}{addBtn("Scadenza",()=>setModal({type:"scad",clienteId:c.id}))}</div>
+                  </div>
+                  {at==="Formazione"&&<div>{renderMatrix(cs,cL)}
+                    <div style={{marginTop:14,padding:"10px 14px",background:"#F8FAFC",borderRadius:8,border:"1px solid #E2E8F0"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}><span style={{fontSize:12,fontWeight:600,color:"#374151"}}>{"\uD83D\uDC65"} Lavoratori ({cL.length})</span>{addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{cL.map(l=><div key={l.id} style={{background:"#fff",padding:"4px 10px",borderRadius:6,fontSize:11,border:"1px solid #E2E8F0",display:"flex",alignItems:"center",gap:4}}><span style={{fontWeight:600}}>{l.nome} {l.cognome}</span> <span style={{color:"#6B7280"}}>{l.mansione}</span></div>)}</div>
+                    </div>
+                  </div>}
+                  {at!=="Formazione"&&renderTable(tabS)}
+                </div>
+              </div>
+            </div>;
+          })()}
         </div>}
 
         {/* ALERT */}
@@ -552,9 +581,30 @@ export default function App() {
           </div>);})()}
         </div>}
 
-      </div>
+        {/* LOG ATTIVITA */}
+        {pg==="log"&&<div>
+          <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 20px"}}>{"\uD83D\uDCDD"} Log Attivita</h1>
+          <p style={{fontSize:13,color:"#6B7280",marginBottom:16}}>Registro di tutte le operazioni effettuate dagli utenti.</p>
+          {!auditLogs.length?<div style={{padding:20,textAlign:"center",color:"#9CA3AF"}}>Nessuna attivita registrata.</div>:
+          <div style={{overflowX:"auto",borderRadius:8,border:"1px solid #D1D5DB"}}><table style={{borderCollapse:"collapse",width:"100%",minWidth:700}}>
+            <thead><tr>
+              <th style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:"#fff",background:"#1E3A5F",border:"1px solid #D1D5DB",textAlign:"left"}}>Data/Ora</th>
+              <th style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:"#fff",background:"#1E3A5F",border:"1px solid #D1D5DB",textAlign:"left"}}>Utente</th>
+              <th style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:"#fff",background:"#1E3A5F",border:"1px solid #D1D5DB",textAlign:"left"}}>Azione</th>
+              <th style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:"#fff",background:"#1E3A5F",border:"1px solid #D1D5DB",textAlign:"left"}}>Tabella</th>
+              <th style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:"#fff",background:"#1E3A5F",border:"1px solid #D1D5DB",textAlign:"left"}}>Dettagli</th>
+            </tr></thead>
+            <tbody>{auditLogs.map((l,i)=><tr key={l.id} style={{background:i%2===0?"#fff":"#F9FAFB"}}>
+              <td style={{padding:"7px 10px",border:"1px solid #E5E7EB",fontSize:11,whiteSpace:"nowrap"}}>{new Date(l.created_at).toLocaleString("it-IT")}</td>
+              <td style={{padding:"7px 10px",border:"1px solid #E5E7EB",fontSize:12,fontWeight:600}}>{l.utente_email}</td>
+              <td style={{padding:"7px 10px",border:"1px solid #E5E7EB",fontSize:12}}><span style={{background:l.azione.includes("Elimin")?"#FEE2E2":l.azione.includes("Nuov")?"#DCFCE7":"#DBEAFE",color:l.azione.includes("Elimin")?"#DC2626":l.azione.includes("Nuov")?"#16A34A":"#2563EB",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>{l.azione}</span></td>
+              <td style={{padding:"7px 10px",border:"1px solid #E5E7EB",fontSize:12,color:"#6B7280"}}>{l.tabella}</td>
+              <td style={{padding:"7px 10px",border:"1px solid #E5E7EB",fontSize:12}}>{l.dettagli}</td>
+            </tr>)}</tbody>
+          </table></div>}
+        </div>}
 
-      {/* MODALS */}
+      </div>
       {modal?.type==="cliente"&&<Modal title={modal.data?"Modifica Cliente":"Nuovo Cliente"} onClose={()=>setModal(null)}><ClienteForm data={modal.data}/></Modal>}
       {modal?.type==="lav"&&<Modal title={modal.data?"Modifica Lavoratore":"Nuovo Lavoratore"} onClose={()=>setModal(null)}><LavForm data={modal.data} clienteId={modal.clienteId}/></Modal>}
       {modal?.type==="scad"&&<Modal title={modal.data?"Modifica Scadenza":"Nuova Scadenza"} onClose={()=>setModal(null)}><ScadForm data={modal.data} clienteId={modal.clienteId}/></Modal>}
