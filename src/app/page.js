@@ -212,7 +212,65 @@ export default function App() {
     scads.forEach(s=>{const cl=clienti.find(c=>c.id===s.cliente_id);const lv=s.lavoratore_id?lavs.find(l=>l.id===s.lavoratore_id):null;csv+=[s.categoria,cl?.nome||"",lv?`${lv.nome} ${lv.cognome}`:"",s.descrizione,s.data_esecuzione||"",s.periodicita_mesi,s.data_scadenza||"",s.gg??"",SC[s.stato].l,s.alert_on?"SI":"NO",s.note||""].join(sep)+"\n";});
     const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
     const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`backup_ecostudio_${now}.csv`;a.click();
-    showToast("Backup scaricato!");
+    showToast("Backup CSV scaricato!");
+  };
+
+  const backupJSON = () => {
+    const now=new Date().toISOString().split("T")[0];
+    const data = { versione:"1.0", data_backup:now, clienti, lavoratori:lavs, scadenze:scads.map(({gg,stato,...rest})=>rest), archivio, consulenza:cons, fatturazione:fatt };
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`backup_ecostudio_${now}.json`;a.click();
+    showToast("Backup JSON scaricato!");
+  };
+
+  const restoreJSON = async (file) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.clienti || !data.lavoratori || !data.scadenze) { showToast("File non valido — mancano dati"); return; }
+      setConfirm({msg:`Ripristinare il backup del ${data.data_backup||"?"}? ATTENZIONE: tutti i dati attuali verranno sovrascritti con quelli del backup.`,action:async()=>{
+        setConfirm(null); showToast("Ripristino in corso...");
+        // Delete existing data (order matters for foreign keys)
+        await supabase.from('scadenze').delete().neq('id',0);
+        await supabase.from('lavoratori').delete().neq('id',0);
+        await supabase.from('consulenza').delete().neq('id',0);
+        await supabase.from('fatturazione').delete().neq('id',0);
+        await supabase.from('archivio').delete().neq('id',0);
+        await supabase.from('clienti').delete().neq('id',0);
+        // Insert backup data (without IDs to let serial auto-increment)
+        const idMap = {};
+        // Clienti
+        for (const c of data.clienti) {
+          const {id:oldId,...rest} = c;
+          const {data:ins} = await supabase.from('clienti').insert(rest).select().single();
+          if(ins) idMap[`c_${oldId}`] = ins.id;
+        }
+        // Lavoratori
+        const lavIdMap = {};
+        for (const l of data.lavoratori) {
+          const {id:oldId,cliente_id,...rest} = l;
+          const newCId = idMap[`c_${cliente_id}`] || cliente_id;
+          const {data:ins} = await supabase.from('lavoratori').insert({...rest,cliente_id:newCId}).select().single();
+          if(ins) lavIdMap[`l_${oldId}`] = ins.id;
+        }
+        // Scadenze
+        for (const s of data.scadenze) {
+          const {id:oldId,cliente_id,lavoratore_id,...rest} = s;
+          const newCId = idMap[`c_${cliente_id}`] || cliente_id;
+          const newLId = lavoratore_id ? (lavIdMap[`l_${lavoratore_id}`] || lavoratore_id) : null;
+          await supabase.from('scadenze').insert({...rest,cliente_id:newCId,lavoratore_id:newLId});
+        }
+        // Archivio
+        if (data.archivio?.length) { for (const a of data.archivio) { const {id,...rest}=a; await supabase.from('archivio').insert(rest); } }
+        // Consulenza
+        if (data.consulenza?.length) { for (const c of data.consulenza) { const {id,...rest}=c; await supabase.from('consulenza').insert(rest); } }
+        // Fatturazione
+        if (data.fatturazione?.length) { for (const f of data.fatturazione) { const {id,...rest}=f; await supabase.from('fatturazione').insert(rest); } }
+        await logAction('Ripristino backup','sistema',null,`Backup del ${data.data_backup}`);
+        await loadAll();
+        showToast("Ripristino completato!");
+      }});
+    } catch(e) { showToast("Errore nel file: " + e.message); }
   };
 
   // FORMS
@@ -408,7 +466,9 @@ export default function App() {
           ))}
         </nav>
         <div style={{padding:"8px 10px",display:"flex",flexDirection:"column",gap:4}}>
-          {isAdmin&&<button onClick={backup} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",color:"#4ADE80",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDCBE"} Esporta Backup</button>}
+          {isAdmin&&<button onClick={backup} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",color:"#4ADE80",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDCBE"} Backup CSV</button>}
+          {isAdmin&&<button onClick={backupJSON} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.3)",color:"#60A5FA",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDCE6"} Backup JSON</button>}
+          {isAdmin&&<label style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(251,191,36,.15)",border:"1px solid rgba(251,191,36,.3)",color:"#FBBF24",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDD04"} Ripristina JSON<input type="file" accept=".json" style={{display:"none"}} onChange={e=>{if(e.target.files[0])restoreJSON(e.target.files[0]);e.target.value="";}}/></label>}
           <button onClick={logout} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(248,113,113,.15)",border:"1px solid rgba(248,113,113,.3)",color:"#F87171",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDEAA"} Esci</button>
         </div>
         <div style={{padding:"12px 16px",borderTop:"1px solid #1E3A5F",fontSize:8,color:"#4B6584",lineHeight:1.6}}>ECOSTUDIO S.r.l.<br/>Via G.B. Velluti, 100<br/>62100 Macerata (MC)<br/>P.IVA 01387220435<br/>Tel 0733-280192</div>
@@ -531,11 +591,11 @@ export default function App() {
 
         {/* ARCHIVIO */}
         {pg==="arch"&&<div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:0}}>{"\uD83D\uDCC2"} Archivio</h1>{addBtn("Nuova Voce",()=>setModal({type:"arch"}))}</div>
-          <p style={{fontSize:13,color:"#6B7280",marginBottom:16}}>Catalogo adempimenti predefiniti. Compare nel menu a tendina quando aggiungi scadenze.</p>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:0}}>{"\uD83D\uDCC2"} Archivio {!isAdmin&&<span style={{fontSize:12,color:"#9CA3AF",fontWeight:400}}>{"\uD83D\uDD12"} sola lettura</span>}</h1>{isAdmin&&addBtn("Nuova Voce",()=>setModal({type:"arch"}))}</div>
+          <p style={{fontSize:13,color:"#6B7280",marginBottom:16}}>{isAdmin?"Catalogo adempimenti predefiniti. Compare nel menu a tendina quando aggiungi scadenze.":"Elenco degli adempimenti disponibili. Per aggiungere una scadenza, vai nella Dashboard e clicca + Scadenza."}</p>
           {CATS.map(cat=>{const items=archivio.filter(a=>a.categoria===cat);if(!items.length)return null;return<div key={cat} style={{marginBottom:20}}>
             <h2 style={{fontSize:15,fontWeight:700,color:CC[cat],margin:"0 0 10px"}}>{CK[cat]} {cat} ({items.length})</h2>
-            <div style={{overflowX:"auto",borderRadius:8,border:bdr}}><table style={{borderCollapse:"collapse",width:"100%"}}><thead><tr><th style={{...thS,textAlign:"left"}}>Descrizione</th><th style={{...thS,width:80}}>Mesi</th><th style={{...thS,textAlign:"left"}}>Note</th><th style={{...thS,width:70}}>Azioni</th></tr></thead><tbody>{items.map((a,i)=><tr key={a.id} style={{background:i%2===0?"#fff":"#F9FAFB"}}><td style={{...tdS,fontWeight:600}}>{a.descrizione}</td><td style={{...tdS,textAlign:"center",fontWeight:700}}>{a.periodicita_mesi||"-"}</td><td style={{...tdS,color:"#6B7280"}}>{a.note||""}</td><td style={{...tdS,textAlign:"center"}}><button onClick={()=>setModal({type:"arch",data:a})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#6B7280"}}>{"\u270F"}</button><button onClick={()=>setConfirm({msg:`Eliminare "${a.descrizione}"?`,action:()=>deleteArch(a.id)})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#DC2626"}}>{"\uD83D\uDDD1"}</button></td></tr>)}</tbody></table></div>
+            <div style={{overflowX:"auto",borderRadius:8,border:bdr}}><table style={{borderCollapse:"collapse",width:"100%"}}><thead><tr><th style={{...thS,textAlign:"left"}}>Descrizione</th><th style={{...thS,width:80}}>Mesi</th><th style={{...thS,textAlign:"left"}}>Note</th>{isAdmin&&<th style={{...thS,width:70}}>Azioni</th>}</tr></thead><tbody>{items.map((a,i)=><tr key={a.id} style={{background:i%2===0?"#fff":"#F9FAFB"}}><td style={{...tdS,fontWeight:600}}>{a.descrizione}</td><td style={{...tdS,textAlign:"center",fontWeight:700}}>{a.periodicita_mesi||"-"}</td><td style={{...tdS,color:"#6B7280"}}>{a.note||""}</td>{isAdmin&&<td style={{...tdS,textAlign:"center"}}><button onClick={()=>setModal({type:"arch",data:a})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#6B7280"}}>{"\u270F"}</button><button onClick={()=>setConfirm({msg:`Eliminare "${a.descrizione}"?`,action:()=>deleteArch(a.id)})} style={{fontSize:12,background:"none",border:"none",cursor:"pointer",color:"#DC2626"}}>{"\uD83D\uDDD1"}</button></td>}</tr>)}</tbody></table></div>
           </div>;})}
         </div>}
 
