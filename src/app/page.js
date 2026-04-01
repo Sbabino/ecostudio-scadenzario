@@ -28,6 +28,8 @@ function enrichScad(s) { const gg = ggDa(s.data_scadenza); return { ...s, gg, st
 
 export default function App() {
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [profilo, setProfilo] = useState(null);
   const [clienti, setClienti] = useState([]);
   const [lavs, setLavs] = useState([]);
   const [scads, setScads] = useState([]);
@@ -35,6 +37,7 @@ export default function App() {
   const [cons, setCons] = useState([]);
   const [fatt, setFatt] = useState([]);
   const [alertLogs, setAlertLogs] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [pg, setPg] = useState("dash");
   const [selC, setSelC] = useState(null);
   const [selCat, setSelCat] = useState(null);
@@ -45,16 +48,36 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   const showToast = msg => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+  const isAdmin = profilo?.ruolo === 'admin';
+  const clienteIdFiltro = !isAdmin && profilo?.cliente_id ? profilo.cliente_id : null;
+
+  // Auth check
+  useEffect(() => {
+    supabase.auth.getSession().then(({data:{session}}) => {
+      if (!session) { window.location.href = '/login'; return; }
+      setUser(session.user);
+      supabase.from('profili').select('*').eq('id', session.user.id).single().then(({data}) => {
+        if (data && !data.attivo) { supabase.auth.signOut(); window.location.href = '/login'; return; }
+        setProfilo(data);
+      });
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session) window.location.href = '/login';
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   const loadAll = useCallback(async () => {
+    if (!profilo) return;
+    const q = clienteIdFiltro ? `.eq('cliente_id',${clienteIdFiltro})` : '';
     const [c, l, s, a, co, al, fa] = await Promise.all([
-      supabase.from('clienti').select('*').order('nome'),
-      supabase.from('lavoratori').select('*').order('cognome'),
-      supabase.from('scadenze').select('*').order('data_scadenza'),
+      clienteIdFiltro ? supabase.from('clienti').select('*').eq('id',clienteIdFiltro) : supabase.from('clienti').select('*').order('nome'),
+      clienteIdFiltro ? supabase.from('lavoratori').select('*').eq('cliente_id',clienteIdFiltro).order('cognome') : supabase.from('lavoratori').select('*').order('cognome'),
+      clienteIdFiltro ? supabase.from('scadenze').select('*').eq('cliente_id',clienteIdFiltro).order('data_scadenza') : supabase.from('scadenze').select('*').order('data_scadenza'),
       supabase.from('archivio').select('*').order('categoria,descrizione'),
-      supabase.from('consulenza').select('*').order('data_scadenza'),
+      isAdmin ? supabase.from('consulenza').select('*').order('data_scadenza') : {data:[]},
       supabase.from('alert_log').select('*').order('data_invio'),
-      supabase.from('fatturazione').select('*').order('data_fattura'),
+      isAdmin ? supabase.from('fatturazione').select('*').order('data_fattura') : {data:[]},
     ]);
     setClienti(c.data || []);
     setLavs(l.data || []);
@@ -63,10 +86,14 @@ export default function App() {
     setCons(co.data || []);
     setAlertLogs(al.data || []);
     setFatt(fa.data || []);
+    if (isAdmin) {
+      const { data: profs } = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'list'}) }).then(r=>r.json());
+      setProfiles(profs || []);
+    }
     setLoading(false);
-  }, []);
+  }, [profilo, isAdmin, clienteIdFiltro]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { if (profilo) loadAll(); }, [profilo, loadAll]);
 
   // CRUD
   const saveCliente = async (f) => {
@@ -130,6 +157,30 @@ export default function App() {
     await loadAll(); setModal(null); showToast("Fatturazione salvata!");
   };
   const deleteFatt = async (id) => { await supabase.from('fatturazione').delete().eq('id',id); await loadAll(); setConfirm(null); showToast("Voce eliminata"); };
+
+  // User management
+  const createUserAccess = async (email, password, cliente_id) => {
+    const res = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'create',email,password,cliente_id,ruolo:'cliente'}) });
+    const data = await res.json();
+    if (data.error) { showToast("Errore: " + data.error); return; }
+    await loadAll(); showToast("Accesso creato!");
+  };
+  const toggleUserAccess = async (user_id, currentlyActive) => {
+    const action = currentlyActive ? 'disable' : 'enable';
+    await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,user_id}) });
+    await loadAll(); showToast(currentlyActive ? "Accesso disattivato" : "Accesso riattivato");
+  };
+  const resetUserPassword = async (user_id, newPassword) => {
+    const res = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'reset_password',user_id,password:newPassword}) });
+    const data = await res.json();
+    if (data.error) { showToast("Errore: " + data.error); return; }
+    showToast("Password aggiornata!");
+  };
+  const deleteUserAccess = async (user_id) => {
+    await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'delete',user_id}) });
+    await loadAll(); setConfirm(null); showToast("Accesso eliminato");
+  };
+  const logout = async () => { await supabase.auth.signOut(); window.location.href = '/login'; };
 
   // Stats
   const cnt = f => scads.filter(f).length;
@@ -221,6 +272,24 @@ export default function App() {
       <Field label="Data scadenza"><input style={inputS} type="date" value={f.data_scadenza||""} onChange={e=>setF({...f,data_scadenza:e.target.value})}/></Field>
       <Field label="Note"><textarea style={{...inputS,minHeight:80}} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})}/></Field>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:f.descrizione?1:.5}} disabled={!f.descrizione} onClick={()=>saveCons(f)}>Salva</button></div>
+    </div>;
+  };
+
+  const UserAccessForm = ({clienteData}) => {
+    const [email,setEmail]=useState(clienteData?.email||"");
+    const [pwd,setPwd]=useState("");
+    return <div>
+      <Field label="Email (username) *"><input style={inputS} type="email" value={email} onChange={e=>setEmail(e.target.value)}/></Field>
+      <Field label="Password *"><input style={inputS} type="text" value={pwd} onChange={e=>setPwd(e.target.value)} placeholder="Minimo 6 caratteri"/></Field>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:(email&&pwd&&pwd.length>=6)?1:.5}} disabled={!email||!pwd||pwd.length<6} onClick={()=>{createUserAccess(email,pwd,clienteData.id);setModal(null);}}>Crea Accesso</button></div>
+    </div>;
+  };
+
+  const ResetPwdForm = ({userId}) => {
+    const [pwd,setPwd]=useState("");
+    return <div>
+      <Field label="Nuova Password *"><input style={inputS} type="text" value={pwd} onChange={e=>setPwd(e.target.value)} placeholder="Minimo 6 caratteri"/></Field>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button style={btnG} onClick={()=>setModal(null)}>Annulla</button><button style={{...btnP,opacity:(pwd&&pwd.length>=6)?1:.5}} disabled={!pwd||pwd.length<6} onClick={()=>{resetUserPassword(userId,pwd);setModal(null);}}>Aggiorna</button></div>
     </div>;
   };
 
@@ -320,14 +389,17 @@ export default function App() {
           <div style={{fontSize:7.5,color:"#64748B",letterSpacing:1.5,marginTop:2}}>Rifiuti ~ Ambiente ~ Sicurezza</div>
         </div>
         <nav style={{padding:"14px 8px",flex:1,display:"flex",flexDirection:"column",gap:2}}>
-          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard"},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert"},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti"},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio"},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione"},{id:"cons",ic:"\uD83D\uDD12",lb:"Consulenza"}].map(it=>(
+          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard",admin:false},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert",admin:false},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti",admin:true},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio",admin:true},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione",admin:true},{id:"cons",ic:"\uD83D\uDD12",lb:"Consulenza",admin:true}].filter(it=>isAdmin||!it.admin).map(it=>(
             <button key={it.id} onClick={()=>{setPg(it.id);setSelC(null);}} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",background:pg===it.id||(pg==="det"&&it.id==="cli")?"rgba(37,99,235,.35)":"transparent",border:"none",color:"#fff",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:pg===it.id?700:400,textAlign:"left"}}>
               <span style={{fontSize:15}}>{it.ic}</span>{it.lb}
               {it.id==="alert"&&(tS+tU)>0&&<span style={{marginLeft:"auto",background:"#DC2626",padding:"2px 7px",borderRadius:10,fontSize:10,fontWeight:700}}>{tS+tU}</span>}
             </button>
           ))}
         </nav>
-        <div style={{padding:"8px 10px"}}><button onClick={backup} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",color:"#4ADE80",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDCBE"} Esporta Backup</button></div>
+        <div style={{padding:"8px 10px",display:"flex",flexDirection:"column",gap:4}}>
+          {isAdmin&&<button onClick={backup} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",color:"#4ADE80",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDCBE"} Esporta Backup</button>}
+          <button onClick={logout} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 14px",background:"rgba(248,113,113,.15)",border:"1px solid rgba(248,113,113,.3)",color:"#F87171",borderRadius:10,cursor:"pointer",fontSize:11,fontWeight:600}}>{"\uD83D\uDEAA"} Esci</button>
+        </div>
         <div style={{padding:"12px 16px",borderTop:"1px solid #1E3A5F",fontSize:8,color:"#4B6584",lineHeight:1.6}}>ECOSTUDIO S.r.l.<br/>Via G.B. Velluti, 100<br/>62100 Macerata (MC)<br/>P.IVA 01387220435<br/>Tel 0733-280192</div>
       </div>
 
@@ -336,17 +408,26 @@ export default function App() {
 
         {/* DASHBOARD */}
         {pg==="dash"&&<div>
-          <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 20px"}}>Dashboard Scadenzario</h1>
+          <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 20px"}}>{isAdmin?"Dashboard Scadenzario":"Le tue Scadenze"}</h1>
           <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:28}}>
             <StatC label="SCADUTI" value={tS} color="#DC2626" icon={"\uD83D\uDD34"}/><StatC label="URGENTI" value={tU} color="#F59E0B" icon={"\uD83D\uDFE0"}/><StatC label="IN SCADENZA" value={tI} color="#EAB308" icon={"\uD83D\uDFE1"}/><StatC label="IN REGOLA" value={tO} color="#16A34A" icon={"\uD83D\uDFE2"}/>
           </div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h2 style={{fontSize:15,fontWeight:700,color:"#374151",margin:0}}>Clienti</h2>{addBtn("Nuovo Cliente",()=>setModal({type:"cliente"}))}</div>
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {clienti.map(c=>{const s=cSt(c.id),sem=cSem(c.id);return<div key={c.id} onClick={()=>goC(c)} style={{background:"#fff",borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`5px solid ${SC[sem].bg}`}}>
-              <div><div style={{fontWeight:700,fontSize:15,color:"#1F2937"}}>{c.nome}</div><div style={{fontSize:12,color:"#6B7280",marginTop:2}}>{c.referente} · {c.sede}</div></div>
-              <div style={{display:"flex",alignItems:"center",gap:14}}><div style={{display:"flex",gap:8,fontSize:12}}>{s.s>0&&<span style={{color:"#DC2626",fontWeight:700}}>{s.s} {"\uD83D\uDD34"}</span>}{s.u>0&&<span style={{color:"#F59E0B",fontWeight:700}}>{s.u} {"\uD83D\uDFE0"}</span>}{s.i>0&&<span style={{color:"#EAB308",fontWeight:700}}>{s.i} {"\uD83D\uDFE1"}</span>}<span style={{color:"#16A34A",fontWeight:700}}>{s.o} {"\uD83D\uDFE2"}</span></div><span style={{fontSize:20,color:"#CBD5E1"}}>{"\u203A"}</span></div>
-            </div>;})}
-          </div>
+          {isAdmin&&<div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h2 style={{fontSize:15,fontWeight:700,color:"#374151",margin:0}}>Clienti</h2>{addBtn("Nuovo Cliente",()=>setModal({type:"cliente"}))}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {clienti.map(c=>{const s=cSt(c.id),sem=cSem(c.id);return<div key={c.id} onClick={()=>goC(c)} style={{background:"#fff",borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`5px solid ${SC[sem].bg}`}}>
+                <div><div style={{fontWeight:700,fontSize:15,color:"#1F2937"}}>{c.nome}</div><div style={{fontSize:12,color:"#6B7280",marginTop:2}}>{c.referente} · {c.sede}</div></div>
+                <div style={{display:"flex",alignItems:"center",gap:14}}><div style={{display:"flex",gap:8,fontSize:12}}>{s.s>0&&<span style={{color:"#DC2626",fontWeight:700}}>{s.s} {"\uD83D\uDD34"}</span>}{s.u>0&&<span style={{color:"#F59E0B",fontWeight:700}}>{s.u} {"\uD83D\uDFE0"}</span>}{s.i>0&&<span style={{color:"#EAB308",fontWeight:700}}>{s.i} {"\uD83D\uDFE1"}</span>}<span style={{color:"#16A34A",fontWeight:700}}>{s.o} {"\uD83D\uDFE2"}</span></div><span style={{fontSize:20,color:"#CBD5E1"}}>{"\u203A"}</span></div>
+              </div>;})}
+            </div>
+          </div>}
+          {!isAdmin&&<div>
+            <Legenda/>
+            {scads.sort((a,b)=>(a.gg??9999)-(b.gg??9999)).map(s=><div key={s.id} style={{background:"#fff",borderRadius:10,padding:"12px 16px",marginBottom:6,borderLeft:`5px solid ${SC[s.stato].bg}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div><div style={{fontWeight:600,fontSize:13,color:"#1F2937"}}>{s.descrizione}</div><div style={{fontSize:11,color:"#6B7280",marginTop:1}}>{s.categoria} · Scade: {fmtD(s.data_scadenza)}</div></div>
+              <div style={{textAlign:"right"}}><div style={{fontSize:18,fontWeight:800,color:SC[s.stato].bg}}>{s.gg??"-"}</div><div style={{fontSize:9,color:"#9CA3AF"}}>giorni</div></div>
+            </div>)}
+          </div>}
         </div>}
 
         {/* ALERT */}
@@ -381,6 +462,23 @@ export default function App() {
             <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}><span style={{fontSize:12,color:c.alert_attivi?"#16A34A":"#9CA3AF",fontWeight:600}}>{c.alert_attivi?"\uD83D\uDD14 Alert attivi":"\uD83D\uDD15 Alert off"}</span><button onClick={()=>toggleAlertCli(c.id,c.alert_attivi)} style={{fontSize:11,color:"#2563EB",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>{c.alert_attivi?"Disattiva":"Attiva"}</button></div>
             <div style={{display:"flex",gap:10,marginTop:14,flexWrap:"wrap"}}><StatC label="SCADUTI" value={s.s} color="#DC2626" icon={"\uD83D\uDD34"}/><StatC label="URGENTI" value={s.u} color="#F59E0B" icon={"\uD83D\uDFE0"}/><StatC label="IN SCADENZA" value={s.i} color="#EAB308" icon={"\uD83D\uDFE1"}/><StatC label="OK" value={s.o} color="#16A34A" icon={"\uD83D\uDFE2"}/></div>
           </div>
+          {isAdmin&&(()=>{const cp=profiles.find(p=>p.cliente_id===c.id&&p.ruolo==='cliente');return<div style={{background:"#fff",borderRadius:12,padding:"14px 20px",boxShadow:"0 1px 3px rgba(0,0,0,.06)",marginBottom:16}}>
+            <h3 style={{fontSize:13,fontWeight:700,color:"#374151",margin:"0 0 10px"}}>{"\uD83D\uDD11"} Accesso Portale Cliente</h3>
+            {cp?<div>
+              <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                <span style={{fontSize:12}}>{"\uD83D\uDCE7"} {cp.email}</span>
+                <span style={{fontSize:11,fontWeight:700,color:cp.attivo?"#16A34A":"#DC2626",background:cp.attivo?"#DCFCE7":"#FEE2E2",padding:"2px 10px",borderRadius:12}}>{cp.attivo?"ATTIVO":"DISATTIVATO"}</span>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                <button onClick={()=>toggleUserAccess(cp.id,cp.attivo)} style={{padding:"6px 14px",fontSize:11,fontWeight:600,border:"none",borderRadius:8,cursor:"pointer",background:cp.attivo?"#FEE2E2":"#DCFCE7",color:cp.attivo?"#DC2626":"#16A34A"}}>{cp.attivo?"Disattiva accesso":"Riattiva accesso"}</button>
+                <button onClick={()=>setModal({type:"resetpwd",userId:cp.id})} style={{padding:"6px 14px",fontSize:11,fontWeight:600,border:"1px solid #D1D5DB",borderRadius:8,cursor:"pointer",background:"#fff",color:"#374151"}}>Reset password</button>
+                <button onClick={()=>setConfirm({msg:"Eliminare completamente l'accesso?",action:()=>deleteUserAccess(cp.id)})} style={{padding:"6px 14px",fontSize:11,fontWeight:600,border:"none",borderRadius:8,cursor:"pointer",background:"#FEE2E2",color:"#DC2626"}}>Elimina accesso</button>
+              </div>
+            </div>:<div>
+              <p style={{fontSize:12,color:"#9CA3AF",marginBottom:10}}>Nessun accesso configurato per questo cliente.</p>
+              <button onClick={()=>setModal({type:"useraccess",clienteData:c})} style={{...btnP,fontSize:12,padding:"8px 16px"}}>+ Crea accesso cliente</button>
+            </div>}
+          </div>;})()}
           <Legenda/>
           <div style={{background:"#fff",borderRadius:"12px 12px 0 0",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
             <div style={{display:"flex",borderBottom:"2px solid #E5E7EB",padding:"0 8px",overflowX:"auto"}}>
@@ -463,6 +561,8 @@ export default function App() {
       {modal?.type==="arch"&&<Modal title={modal.data?"Modifica Voce":"Nuova Voce Archivio"} onClose={()=>setModal(null)}><ArchForm data={modal.data}/></Modal>}
       {modal?.type==="fatt"&&<Modal title={modal.data?"Modifica Fatturazione":"Nuova Fatturazione"} onClose={()=>setModal(null)}><FattForm data={modal.data}/></Modal>}
       {modal?.type==="cons"&&<Modal title={modal.data?"Modifica Nota":"Nuova Nota"} onClose={()=>setModal(null)}><ConsForm data={modal.data}/></Modal>}
+      {modal?.type==="useraccess"&&<Modal title="Crea Accesso Cliente" onClose={()=>setModal(null)}><UserAccessForm clienteData={modal.clienteData}/></Modal>}
+      {modal?.type==="resetpwd"&&<Modal title="Reset Password" onClose={()=>setModal(null)}><ResetPwdForm userId={modal.userId}/></Modal>}
 
       {lpop&&<Modal title={`\uD83D\uDCE7 Log: ${lpop.descrizione}`} onClose={()=>setLpop(null)}>
         {(()=>{const logs=scadLogs(lpop.id);return!logs.length?<p style={{color:"#9CA3AF",fontSize:13}}>Nessun avviso inviato.</p>:<div style={{display:"flex",flexDirection:"column",gap:6}}>{logs.map((l,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"#F3F4F6",borderRadius:8,fontSize:13}}><span style={{fontWeight:600}}>Soglia {l.soglia_giorni}gg</span><span style={{color:"#6B7280"}}>{fmtD(l.data_invio)}</span></div>)}</div>;})()}
