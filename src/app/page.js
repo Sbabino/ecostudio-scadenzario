@@ -70,7 +70,6 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     if (!profilo) return;
-    const q = clienteIdFiltro ? `.eq('cliente_id',${clienteIdFiltro})` : '';
     const [c, l, s, a, co, al, fa] = await Promise.all([
       clienteIdFiltro ? supabase.from('clienti').select('*').eq('id',clienteIdFiltro) : supabase.from('clienti').select('*').order('nome'),
       clienteIdFiltro ? supabase.from('lavoratori').select('*').eq('cliente_id',clienteIdFiltro).order('cognome') : supabase.from('lavoratori').select('*').order('cognome'),
@@ -191,6 +190,126 @@ export default function App() {
   };
   const logout = async () => { await supabase.auth.signOut(); window.location.href = '/login'; };
 
+  // ─── STAMPA FORMAZIONE ────────────────────────────────────────────────────
+  const printFormazione = (cs, cL, clienteName) => {
+    const formS = cs.filter(x => x.categoria === "Formazione");
+    const corsi = [...new Set(formS.map(s => s.descrizione))];
+    const lavF = cL.filter(l => formS.some(s => s.lavoratore_id === l.id));
+    if (!lavF.length || !corsi.length) { showToast("Nessun dato formazione da stampare."); return; }
+
+    const today = new Date().toLocaleDateString("it-IT");
+
+    const cellColor = stato => {
+      if (stato === "scaduto")    return { bg:"#FEE2E2", num:"#DC2626", badge:"#DC2626", badgeT:"#fff",  label:"SCADUTO"     };
+      if (stato === "urgente")    return { bg:"#FEF3C7", num:"#F59E0B", badge:"#F59E0B", badgeT:"#000",  label:"URGENTE"     };
+      if (stato === "inScadenza") return { bg:"#FEF9C3", num:"#CA8A04", badge:"#EAB308", badgeT:"#000",  label:"IN SCADENZA" };
+      return                             { bg:"#DCFCE7", num:"#16A34A", badge:"#16A34A", badgeT:"#fff",  label:"OK"          };
+    };
+
+    const hdrs = corsi.map(c =>
+      `<th style="padding:8px 6px;background:#1E3A5F;color:#fff;font-size:10px;font-weight:700;border:1px solid #374151;min-width:110px;text-align:center">${c}</th>`
+    ).join("");
+
+    const rows = lavF.map((l, ri) => {
+      const cells = corsi.map(corso => {
+        const sc = formS.find(s => s.lavoratore_id === l.id && s.descrizione === corso);
+        if (!sc) return `<td style="padding:8px 6px;border:1px solid #E5E7EB;text-align:center;color:#D1D5DB;background:${ri%2===0?"#fff":"#F9FAFB"}">—</td>`;
+        const c = cellColor(sc.stato);
+        return `<td style="padding:8px 6px;border:1px solid #E5E7EB;background:${c.bg};text-align:center">
+          <div style="font-weight:800;font-size:17px;color:${c.num}">${sc.gg}</div>
+          <div style="font-size:9px;color:#6B7280;margin-top:2px">scad. ${fmtD(sc.data_scadenza)}</div>
+          <span style="display:inline-block;margin-top:3px;background:${c.badge};color:${c.badgeT};padding:2px 7px;border-radius:10px;font-size:8px;font-weight:700;letter-spacing:.4px">${c.label}</span>
+        </td>`;
+      }).join("");
+      return `<tr>
+        <td style="padding:8px 10px;border:1px solid #E5E7EB;font-weight:600;font-size:12px;background:${ri%2===0?"#F8FAFC":"#EFF6FF"};white-space:nowrap;border-right:2px solid #94A3B8">
+          ${l.nome} ${l.cognome}
+          ${l.mansione ? `<div style="font-size:9px;color:#6B7280;font-weight:400;margin-top:1px">${l.mansione}${l.note ? ' · ' + l.note : ''}</div>` : ''}
+        </td>${cells}
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Formazione — ${clienteName}</title>
+  <style>
+    @page { margin: 1.5cm; size: landscape; }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .no-print { display: none !important; }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #1F2937; }
+    table { border-collapse: collapse; width: 100%; }
+    h2 { margin: 0 0 14px; font-size: 15px; font-weight: 800; color: #1E3A5F; }
+  </style>
+</head>
+<body>
+  <!-- INTESTAZIONE -->
+  <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:3px solid #1E3A5F;margin-bottom:16px">
+    <div>
+      <div style="font-size:19px;font-weight:900;color:#1E3A5F;letter-spacing:1.2px">ECOSTUDIO S.R.L.</div>
+      <div style="font-size:9px;color:#6B7280;margin-top:3px;letter-spacing:.5px">Centro Elaborazione Dati &nbsp;·&nbsp; Rifiuti ~ Ambiente ~ Sicurezza</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:15px;font-weight:700;color:#374151">${clienteName}</div>
+      <div style="font-size:10px;color:#9CA3AF;margin-top:2px">Stampa del ${today}</div>
+    </div>
+  </div>
+
+  <h2>🎓 Matrice Formazione</h2>
+
+  <!-- LEGENDA -->
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:7px 12px;background:#F8FAFC;border-radius:6px;border:1px solid #E2E8F0;margin-bottom:14px">
+    <span style="font-size:10px;font-weight:700;color:#374151">LEGENDA:</span>
+    ${[["#DC2626","SCADUTO","Oltre la data"],["#F59E0B","URGENTE","Entro 30gg"],["#EAB308","IN SCADENZA","Entro 90gg"],["#16A34A","OK","Oltre 90gg"]].map(([col,lab,desc])=>
+      `<span style="display:inline-flex;align-items:center;gap:5px;font-size:9px">
+        <span style="display:inline-block;width:11px;height:11px;border-radius:2px;background:${col}"></span>
+        <strong style="color:${col}">${lab}</strong>
+        <span style="color:#6B7280">= ${desc}</span>
+      </span>`
+    ).join("")}
+    <span style="margin-left:auto;font-size:9px;color:#9CA3AF">I numeri indicano i giorni al/dalla scadenza</span>
+  </div>
+
+  <!-- MATRICE -->
+  <table>
+    <thead>
+      <tr>
+        <th style="padding:8px 10px;background:#1E3A5F;color:#fff;font-size:11px;font-weight:700;border:1px solid #374151;text-align:left;min-width:160px;border-right:2px solid #94A3B8">Lavoratore</th>
+        ${hdrs}
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+
+  <!-- PIE DI PAGINA -->
+  <div style="margin-top:18px;font-size:9px;color:#9CA3AF;border-top:1px solid #E5E7EB;padding-top:8px;display:flex;justify-content:space-between">
+    <span>ECOSTUDIO S.r.l. &nbsp;·&nbsp; Via G.B. Velluti, 100 &nbsp;·&nbsp; 62100 Macerata (MC) &nbsp;·&nbsp; P.IVA 01387220435 &nbsp;·&nbsp; Tel 0733-280192</span>
+    <span>Documento generato automaticamente dal Sistema Scadenzario</span>
+  </div>
+
+  <div class="no-print" style="margin-top:20px;text-align:center">
+    <button onclick="window.print()" style="padding:10px 28px;background:#1E40AF;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🖨️ Stampa / Salva PDF</button>
+    <button onclick="window.close()" style="margin-left:12px;padding:10px 20px;background:#F3F4F6;color:#374151;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">Chiudi</button>
+  </div>
+
+  <script>
+    // Auto-print dopo il caricamento
+    window.onload = () => { window.print(); }
+  </script>
+</body>
+</html>`;
+
+    const w = window.open("", "_blank", "width=1100,height=750");
+    if (!w) { showToast("Popup bloccato dal browser — consenti i popup per questo sito."); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Stats
   const cnt = f => scads.filter(f).length;
   const tS=cnt(s=>s.stato==="scaduto"),tU=cnt(s=>s.stato==="urgente"),tI=cnt(s=>s.stato==="inScadenza"),tO=cnt(s=>s.stato==="ok");
@@ -230,41 +349,19 @@ export default function App() {
       if (!data.clienti || !data.lavoratori || !data.scadenze) { showToast("File non valido — mancano dati"); return; }
       setConfirm({msg:`Ripristinare il backup del ${data.data_backup||"?"}? ATTENZIONE: tutti i dati attuali verranno sovrascritti con quelli del backup.`,action:async()=>{
         setConfirm(null); showToast("Ripristino in corso...");
-        // Delete existing data (order matters for foreign keys)
         await supabase.from('scadenze').delete().neq('id',0);
         await supabase.from('lavoratori').delete().neq('id',0);
         await supabase.from('consulenza').delete().neq('id',0);
         await supabase.from('fatturazione').delete().neq('id',0);
         await supabase.from('archivio').delete().neq('id',0);
         await supabase.from('clienti').delete().neq('id',0);
-        // Insert backup data (without IDs to let serial auto-increment)
         const idMap = {};
-        // Clienti
-        for (const c of data.clienti) {
-          const {id:oldId,...rest} = c;
-          const {data:ins} = await supabase.from('clienti').insert(rest).select().single();
-          if(ins) idMap[`c_${oldId}`] = ins.id;
-        }
-        // Lavoratori
+        for (const c of data.clienti) { const {id:oldId,...rest} = c; const {data:ins} = await supabase.from('clienti').insert(rest).select().single(); if(ins) idMap[`c_${oldId}`] = ins.id; }
         const lavIdMap = {};
-        for (const l of data.lavoratori) {
-          const {id:oldId,cliente_id,...rest} = l;
-          const newCId = idMap[`c_${cliente_id}`] || cliente_id;
-          const {data:ins} = await supabase.from('lavoratori').insert({...rest,cliente_id:newCId}).select().single();
-          if(ins) lavIdMap[`l_${oldId}`] = ins.id;
-        }
-        // Scadenze
-        for (const s of data.scadenze) {
-          const {id:oldId,cliente_id,lavoratore_id,...rest} = s;
-          const newCId = idMap[`c_${cliente_id}`] || cliente_id;
-          const newLId = lavoratore_id ? (lavIdMap[`l_${lavoratore_id}`] || lavoratore_id) : null;
-          await supabase.from('scadenze').insert({...rest,cliente_id:newCId,lavoratore_id:newLId});
-        }
-        // Archivio
+        for (const l of data.lavoratori) { const {id:oldId,cliente_id,...rest} = l; const newCId = idMap[`c_${cliente_id}`] || cliente_id; const {data:ins} = await supabase.from('lavoratori').insert({...rest,cliente_id:newCId}).select().single(); if(ins) lavIdMap[`l_${oldId}`] = ins.id; }
+        for (const s of data.scadenze) { const {id:oldId,cliente_id,lavoratore_id,...rest} = s; const newCId = idMap[`c_${cliente_id}`] || cliente_id; const newLId = lavoratore_id ? (lavIdMap[`l_${lavoratore_id}`] || lavoratore_id) : null; await supabase.from('scadenze').insert({...rest,cliente_id:newCId,lavoratore_id:newLId}); }
         if (data.archivio?.length) { for (const a of data.archivio) { const {id,...rest}=a; await supabase.from('archivio').insert(rest); } }
-        // Consulenza
         if (data.consulenza?.length) { for (const c of data.consulenza) { const {id,...rest}=c; await supabase.from('consulenza').insert(rest); } }
-        // Fatturazione
         if (data.fatturazione?.length) { for (const f of data.fatturazione) { const {id,...rest}=f; await supabase.from('fatturazione').insert(rest); } }
         await logAction('Ripristino backup','sistema',null,`Backup del ${data.data_backup}`);
         await loadAll();
@@ -369,7 +466,7 @@ export default function App() {
       <Field label="Descrizione *"><input style={inputS} value={f.descrizione} onChange={e=>setF({...f,descrizione:e.target.value})} placeholder="Es: Fattura consulenza annuale, Acconto primo semestre..."/></Field>
       <div style={{display:"flex",gap:12}}>
         <div style={{flex:1}}><Field label="Data fattura"><input style={inputS} type="date" value={f.data_fattura||""} onChange={e=>setF({...f,data_fattura:e.target.value})}/></Field></div>
-        <div style={{flex:1}}><Field label="Importo EUR"><input style={inputS} type="number" min="0" step="0.01" value={f.importo||""} onChange={e=>setF({...f,importo:e.target.value?Number(e.target.value):""})}/></Field></div>
+        <div style={{flex:1}}><Field label="Importo EUR"><input style={inputS} type="number" min="0" step="0.01" value={f.importo||""} onChange={e=>setF({...f,importo:e.target.value?Number(e.target.value):""})} /></Field></div>
       </div>
       <Field label="Periodicita (mesi, opzionale)"><input style={inputS} type="number" min="0" value={f.periodicita_mesi||""} onChange={e=>setF({...f,periodicita_mesi:e.target.value?Number(e.target.value):""})} placeholder="Es: 12 = annuale, 6 = semestrale"/></Field>
       <Field label="Note"><textarea style={{...inputS,minHeight:60}} value={f.note||""} onChange={e=>setF({...f,note:e.target.value})}/></Field>
@@ -448,6 +545,17 @@ export default function App() {
 
   const tabBase = {padding:"10px 18px",border:"none",borderBottom:"3px solid transparent",cursor:"pointer",fontSize:13,fontWeight:600,background:"none",color:"#6B7280"};
 
+  // Tasto stampa formazione
+  const PrintBtn = ({cs, cL, clienteName}) => (
+    <button
+      onClick={() => printFormazione(cs, cL, clienteName)}
+      style={{display:"inline-flex",alignItems:"center",gap:6,padding:"8px 16px",background:"#0F172A",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700}}
+      title="Stampa / Salva PDF matrice formazione"
+    >
+      🖨️ Stampa
+    </button>
+  );
+
   return (
     <div style={{display:"flex",minHeight:"100vh"}}>
       {/* SIDEBAR */}
@@ -458,7 +566,8 @@ export default function App() {
           <div style={{fontSize:7.5,color:"#64748B",letterSpacing:1.5,marginTop:2}}>Rifiuti ~ Ambiente ~ Sicurezza</div>
         </div>
         <nav style={{padding:"14px 8px",flex:1,display:"flex",flexDirection:"column",gap:2}}>
-          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard",admin:false},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert",admin:false},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti",admin:true},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio",admin:false},{id:"log",ic:"\uD83D\uDCDD",lb:"Log Attivita",admin:true},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione",admin:true},{id:"cons",ic:"\uD83D\uDD12",lb:"Consulenza",admin:true}].filter(it=>isAdmin||!it.admin).map(it=>(
+          {/* ── MODIFICA: "Consulenza" → "Note", icona 📝 ── */}
+          {[{id:"dash",ic:"\uD83D\uDCCA",lb:"Dashboard",admin:false},{id:"alert",ic:"\uD83D\uDEA8",lb:"Alert",admin:false},{id:"cli",ic:"\uD83C\uDFE2",lb:"Clienti",admin:true},{id:"arch",ic:"\uD83D\uDCC2",lb:"Archivio",admin:false},{id:"log",ic:"\uD83D\uDCDD",lb:"Log Attivita",admin:true},{id:"fatt",ic:"\uD83D\uDCB6",lb:"Fatturazione",admin:true},{id:"cons",ic:"\uD83D\uDCDD",lb:"Note",admin:true}].filter(it=>isAdmin||!it.admin).map(it=>(
             <button key={it.id} onClick={()=>{setPg(it.id);setSelC(null);}} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",background:pg===it.id||(pg==="det"&&it.id==="cli")?"rgba(37,99,235,.35)":"transparent",border:"none",color:"#fff",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:pg===it.id?700:400,textAlign:"left"}}>
               <span style={{fontSize:15}}>{it.ic}</span>{it.lb}
               {it.id==="alert"&&(tS+tU)>0&&<span style={{marginLeft:"auto",background:"#DC2626",padding:"2px 7px",borderRadius:10,fontSize:10,fontWeight:700}}>{tS+tU}</span>}
@@ -504,7 +613,12 @@ export default function App() {
                 <div style={{padding:"16px 20px"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                     <h3 style={{fontSize:14,fontWeight:700,color:CC[at],margin:0}}>{CK[at]} {at}</h3>
-                    <div style={{display:"flex",gap:8}}>{at==="Formazione"&&addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}{addBtn("Scadenza",()=>setModal({type:"scad",clienteId:c.id}))}</div>
+                    {/* ── PULSANTE STAMPA (tab Formazione, vista cliente) ── */}
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      {at==="Formazione"&&<PrintBtn cs={cs} cL={cL} clienteName={c.nome}/>}
+                      {at==="Formazione"&&addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}
+                      {addBtn("Scadenza",()=>setModal({type:"scad",clienteId:c.id}))}
+                    </div>
                   </div>
                   {at==="Formazione"&&<div>{renderMatrix(cs,cL)}
                     <div style={{marginTop:14,padding:"10px 14px",background:"#F8FAFC",borderRadius:8,border:"1px solid #E2E8F0"}}>
@@ -576,7 +690,12 @@ export default function App() {
             <div style={{padding:"16px 20px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                 <h3 style={{fontSize:14,fontWeight:700,color:CC[at],margin:0}}>{CK[at]} {at}</h3>
-                <div style={{display:"flex",gap:8}}>{at==="Formazione"&&addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}{addBtn("Scadenza",()=>setModal({type:"scad",clienteId:c.id}))}</div>
+                {/* ── PULSANTE STAMPA (tab Formazione, vista admin dettaglio cliente) ── */}
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {at==="Formazione"&&<PrintBtn cs={cs} cL={cL} clienteName={c.nome}/>}
+                  {at==="Formazione"&&addBtn("Lavoratore",()=>setModal({type:"lav",clienteId:c.id}))}
+                  {addBtn("Scadenza",()=>setModal({type:"scad",clienteId:c.id}))}
+                </div>
               </div>
               {at==="Formazione"&&<div>{renderMatrix(cs,cL)}
                 <div style={{marginTop:14,padding:"10px 14px",background:"#F8FAFC",borderRadius:8,border:"1px solid #E2E8F0"}}>
@@ -599,9 +718,9 @@ export default function App() {
           </div>;})}
         </div>}
 
-        {/* CONSULENZA */}
+        {/* NOTE (ex Consulenza) ── SOLO ADMIN ── */}
         {pg==="cons"&&<div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:0}}>{"\uD83D\uDD12"} Consulenza</h1>{addBtn("Nuova Nota",()=>setModal({type:"cons"}))}</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:0}}>{"\uD83D\uDCDD"} Note</h1>{addBtn("Nuova Nota",()=>setModal({type:"cons"}))}</div>
           <div style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#92400E"}}>{"\uD83D\uDD12"} Sezione privata — non visibile ai clienti.</div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {cons.sort((a,b)=>{if(!a.data_scadenza)return 1;if(!b.data_scadenza)return -1;return new Date(a.data_scadenza)-new Date(b.data_scadenza);}).map(c=>{const gg=ggDa(c.data_scadenza),stato=getSt(gg);return<div key={c.id} style={{background:"#fff",borderRadius:10,padding:"14px 18px",border:"1px solid #E5E7EB",borderLeft:`5px solid ${SC[stato].bg}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
